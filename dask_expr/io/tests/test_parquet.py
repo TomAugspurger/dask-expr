@@ -306,6 +306,42 @@ def test_predicate_pushdown_compound(tmpdir):
     assert_eq(y, z)
 
 
+def test_predicate_pullup(tmpdir):
+    left = pd.DataFrame(
+        {
+            "a": [1, 2, 3, 4, 5] * 10,
+            "b": [0, 1, 2, 3, 4] * 10,
+            "c": range(50),
+            "d": [6, 7] * 25,
+            "e": [8, 9] * 25,
+        }
+    )
+    right = pd.DataFrame(
+        {
+            "a": [1, 2, 3, 4, 5] * 10,
+            "b": [0, 1, 2, 3, 4] * 10,
+            "c": range(50),
+            "d": [60, 70] * 25,
+            "e": [80, 90] * 25,
+        }
+    )
+    left_fn = _make_file(tmpdir, df=left, filename="left.parquet")
+    right_fn = _make_file(tmpdir, df=right, filename="right.parquet")
+    ldf = read_parquet(left_fn, filesystem="arrow")
+    rdf = read_parquet(right_fn, filesystem="arrow")
+
+
+    ldf = ldf[ldf["a"] == 1]
+    result = ldf.merge(rdf, on="a")
+    expected = left[left["a"] == 1].merge(right, on="a")
+    assert_eq(result, expected)
+
+    simplified = result.simplify()
+    # pushdown is applied to both sides
+    assert simplified.expr.left.filters == [[("a", "==", 1)]]
+    assert simplified.expr.right.filters == [[("a", "==", 1)]]
+
+
 def test_aggregate_rg_stats_to_file(tmpdir):
     filesystem = fs.LocalFileSystem()
     fn = str(tmpdir)

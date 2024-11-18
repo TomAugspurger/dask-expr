@@ -473,6 +473,26 @@ class Merge(Expr):
         # Blockwise merge
         return BlockwiseMerge(left, right, **self.kwargs)
 
+    def _simplify_down(self):
+        if self.how == "inner" and isinstance(self.left, Filter) and self.left.predicate.left.name == self.left_on and self.left_on == self.right_on:
+            # This should be generalizable. The key requirement is that the
+            # joined on column is also being filtered.
+            if isinstance(self.right, Filter):
+                return super()._simplify_down()
+
+            predicate = self.left.predicate.substitute(
+                self.left.predicate.left,
+                self.right[self.right_on]
+            )
+
+            new_right = Filter(
+                frame=self.right,
+                predicate=predicate,
+            )
+            return self.substitute(self.right, new_right)
+        else:
+            return super()._simplify_down()
+
     def _simplify_up(self, parent, dependents):
         if isinstance(parent, Filter):
             if not self._filter_passthrough_available(parent, dependents):
