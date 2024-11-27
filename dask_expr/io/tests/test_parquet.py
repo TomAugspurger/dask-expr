@@ -1,3 +1,4 @@
+import operator
 import os
 import pickle
 
@@ -306,7 +307,19 @@ def test_predicate_pushdown_compound(tmpdir):
     assert_eq(y, z)
 
 
-def test_predicate_pullup(tmpdir):
+@pytest.mark.parametrize("n_intermediate", [0, 1, 2])
+@pytest.mark.parametrize("how", ["left", "inner", "right"])
+@pytest.mark.parametrize("on_kwargs", [
+    {"on": "a"},
+    {"left_on": "a", "right_on": "a"},
+    {"left_on": "a", "right_on": "A"},
+])
+@pytest.mark.parametrize("op_pair", [
+    ("==", lambda x: operator.eq(x, 1)),
+    ("==", lambda x: operator.eq(1, x)),
+    ("<=", lambda x: operator.le(x, 1)),
+])
+def test_predicate_pullup(tmpdir, n_intermediate: int, how: str, on_kwargs: dict[str, str], op_pair: tuple[str, callable]):
     left = pd.DataFrame(
         {
             "a": [1, 2, 3, 4, 5] * 10,
@@ -316,9 +329,11 @@ def test_predicate_pullup(tmpdir):
             "e": [8, 9] * 25,
         }
     )
+
+    right_on = on_kwargs.get("right_on", "a")
     right = pd.DataFrame(
         {
-            "a": [1, 2, 3, 4, 5] * 10,
+            right_on: [1, 2, 3, 4, 5] * 10,
             "b": [0, 1, 2, 3, 4] * 10,
             "c": range(50),
             "d": [60, 70] * 25,
@@ -330,16 +345,49 @@ def test_predicate_pullup(tmpdir):
     ldf = read_parquet(left_fn, filesystem="arrow")
     rdf = read_parquet(right_fn, filesystem="arrow")
 
+    op_symbol, op = op_pair
 
-    ldf = ldf[ldf["a"] == 1]
-    result = ldf.merge(rdf, on="a")
-    expected = left[left["a"] == 1].merge(right, on="a")
+    if how in ["left", "inner"]:
+        ldf = ldf[op(ldf["a"])]
+
+        if n_intermediate >= 1:
+            ldf == ldf.reset_index(drop=True)
+        if n_intermediate >= 2:
+            ldf == ldf.copy()
+
+        left = left[op(left["a"])]
+
+    elif how == "right":
+        rdf = rdf[op(rdf[right_on])]
+
+        if n_intermediate >= 1:
+            rdf == rdf.reset_index(drop=True)
+        if n_intermediate >= 2:
+            rdf == rdf.copy()
+
+        right = right[op(right[right_on])]
+    else:
+        assert False
+
+    result = ldf.merge(rdf, how=how, **on_kwargs)
+    expected = left.merge(right, how=how, **on_kwargs)
     assert_eq(result, expected)
 
     simplified = result.simplify()
     # pushdown is applied to both sides
-    assert simplified.expr.left.filters == [[("a", "==", 1)]]
-    assert simplified.expr.right.filters == [[("a", "==", 1)]]
+    assert simplified.expr.left.filters == [[("a", op_symbol, 1)]]
+    assert simplified.expr.right.filters == [[(right_on, op_symbol, 1)]]
+
+
+
+# TODO: tests for
+# 1. all join types
+# 2. left / right on different keys
+# 3. constant on LHS & RHS of filter
+# 6. passthrough unsafe
+# 7 direction. Not quite tested enough.
+
+
 
 
 def test_aggregate_rg_stats_to_file(tmpdir):

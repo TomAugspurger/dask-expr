@@ -20,6 +20,7 @@ from dask_expr._util import _BackendData, _tokenize_deterministic
 if TYPE_CHECKING:
     # TODO import from typing (requires Python >=3.10)
     from typing import TypeAlias
+    from dask_expr._expr import Filter
 
 OptimizerStage: TypeAlias = Literal[
     "logical",
@@ -781,6 +782,18 @@ class Expr:
             or issubclass(operation, Expr)
         ), "`operation` must be`Expr` subclass)"
         return (expr for expr in self.walk() if isinstance(expr, operation))
+
+    def _find_filter(self) -> "Filter" | None:
+        # Like find_operations(Filter), but bails out if you encounter any layers
+        # that aren't safe pass a filter through.
+        from dask_expr._expr import Filter
+
+        for node in self.walk():
+            if isinstance(node, Filter):
+                return node
+            elif not node._filter_passthrough:
+                return None
+        return None
 
 
 def collect_dependents(expr) -> defaultdict:

@@ -42,6 +42,7 @@ from dask_expr._shuffle import (
     _select_columns_or_index,
 )
 from dask_expr._util import _convert_to_list, _tokenize_deterministic, is_scalar
+from dask_expr.io.parquet import ReadParquet
 
 _HASH_COLUMN_NAME = "__hash_partition"
 _PARTITION_COLUMN = "_partitions"
@@ -474,24 +475,116 @@ class Merge(Expr):
         return BlockwiseMerge(left, right, **self.kwargs)
 
     def _simplify_down(self):
-        if self.how == "inner" and isinstance(self.left, Filter) and self.left.predicate.left.name == self.left_on and self.left_on == self.right_on:
-            # This should be generalizable. The key requirement is that the
-            # joined on column is also being filtered.
-            if isinstance(self.right, Filter):
-                return super()._simplify_down()
+        # Check for a predicate pull-up opportunity. The requirements are to
+        # 1. Perform a filter and join on the same column
+        # 2. Join type is:
+        #    - inner (check for pull-up on both sides)
+        #    - left (check for pull-up from left filter to right)
+        #    - right (check for pull-up from right filter to left)
+        left_filter: Filter | None
+        right_filter: Filter | None
 
-            predicate = self.left.predicate.substitute(
-                self.left.predicate.left,
-                self.right[self.right_on]
-            )
+        new_right: Filter | None = None
+        new_left: Filter | None = None
 
-            new_right = Filter(
-                frame=self.right,
-                predicate=predicate,
-            )
-            return self.substitute(self.right, new_right)
+        # The join type affects whether we can pull up the filter.
+        # Consider a join with how="left" and a RHS with Filter(a = 1)
+        # If we tried to push that down the LHS, the left join
+        # would be incorrect since you'd filter to [[("a", "==", 1)]].
+        # But the `how="left"` says we want all the keys from the LHS.
+        #
+        # The only safe ones are
+        # 1. how="left" permits left -> right
+        # 2. how="right" permits right -> left
+        # 3. how="inner" permits [left -> right, right -> left]
+
+        if self.how == "inner":
+            left_filter = self.left._find_filter()
+            right_filter = self.right._find_filter()
+
+        elif self.how == "left":
+            left_filter = self.left._find_filter()
+            right_filter = None
+        elif self.how == "right":
+            right_filter = self.right._find_filter()
+            left_filter = None
         else:
-            return super()._simplify_down()
+            left_filter = right_filter = None
+
+        # Now find cases where we can do stuff
+        # replacements = {}
+        # breakpoint()
+        if left_filter is not None:
+            # we should have a left or inner join
+            if left_filter.predicate.name == self.left_on:
+                # TODO: figure out how to combine filters? Actually, who cares?
+                # We shouldn't have to worry about chained filters. A separate
+                # optimization can take care of AND-ing those into a single layer.
+                new_right = Filter(
+                    frame=self.right,
+                    # TODO: confirm that LHS is always the column and RHS is always the value
+                    predicate=left_filter.predicate.substitute(
+                        left_filter.predicate.left, self.right[self.right_on]
+                    )
+                )
+
+        if right_filter is not None:
+            if right_filter.predicate.name == self.right_on:
+                new_left = Filter(
+                    frame=self.left,
+                    # TODO: confirm that
+                    predicate=right_filter.predicate.substitute(
+                        right_filter.predicate.left, self.left[self.left_on]
+                    )
+                )
+        
+        # Right now we make 3 trips through here.
+        # 1. left -> right
+        # 2. right -> left
+        # 3. left -> right
+        #
+        # Between 1 and 2, the left filter is optimized / pushed all the way down
+        # After 3, the optimizer complains that we're in a cycle (which we kinda are)
+        # We need to detect the *optimized* filter and break out of that cycle.
+        result = self
+        # breakpoint()
+        if new_right is not None:
+            left_root = list(self.left.walk())[-1]
+            if isinstance(left_root, ReadParquet) and left_root.filters is not None:
+                pass
+            else:
+                result = result.substitute(result.right, new_right)
+        if new_left is not None:
+            right_root = list(self.right.walk())[-1]
+            if isinstance(right_root, ReadParquet) and right_root.filters is not None:
+                pass
+            else:
+                result = result.substitute(result.left, new_left)
+        if result is not self:
+            return result
+
+        # if (
+        #     self.how == "inner"
+        #     and isinstance(self.left, Filter)
+        #     and self.left.predicate.left.name == self.left_on
+        #     and self.left_on == self.right_on
+        # ):
+        #     # This should be generalizable. The key requirement is that the
+        #     # joined on column is also being filtered.
+        #     if isinstance(self.right, Filter):
+        #         return super()._simplify_down()
+
+        #     predicate = self.left.predicate.substitute(
+        #         self.left.predicate.left, self.right[self.right_on]
+        #     )
+
+        #     new_right = Filter(
+        #         frame=self.right,
+        #         predicate=predicate,
+        #     )
+        #     return self.substitute(self.right, new_right)
+        # else:
+        #     return super()._simplify_down()
 
     def _simplify_up(self, parent, dependents):
         if isinstance(parent, Filter):
