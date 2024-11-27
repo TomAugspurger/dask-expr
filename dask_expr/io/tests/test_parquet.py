@@ -454,7 +454,10 @@ def test_predicate_pullup_both(tmpdir, right_on: str):
     simplified = result.simplify()
     # pushdown is applied to both sides
     assert sorted(simplified.expr.left.filters[0]) == [("a", "<=", 2), ("a", ">=", 1)]
-    assert sorted(simplified.expr.right.filters[0]) == [(right_on, "<=", 2), (right_on, ">=", 1)]
+    assert sorted(simplified.expr.right.filters[0]) == [
+        (right_on, "<=", 2),
+        (right_on, ">=", 1),
+    ]
 
 
 def test_predicate_pullup_isin(tmpdir):
