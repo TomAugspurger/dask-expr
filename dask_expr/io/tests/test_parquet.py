@@ -363,9 +363,9 @@ def test_predicate_pullup(
         ldf = ldf[op(ldf["a"])]
 
         if n_intermediate >= 1:
-            ldf == ldf.reset_index(drop=True)
+            ldf = ldf.reset_index(drop=True)
         if n_intermediate >= 2:
-            ldf == ldf.copy()
+            ldf = ldf.copy()
 
         left = left[op(left["a"])]
 
@@ -373,9 +373,9 @@ def test_predicate_pullup(
         rdf = rdf[op(rdf[right_on])]
 
         if n_intermediate >= 1:
-            rdf == rdf.reset_index(drop=True)
+            rdf = rdf.reset_index(drop=True)
         if n_intermediate >= 2:
-            rdf == rdf.copy()
+            rdf = rdf.copy()
 
         right = right[op(right[right_on])]
     else:
@@ -387,8 +387,22 @@ def test_predicate_pullup(
 
     simplified = result.simplify()
     # pushdown is applied to both sides
-    assert simplified.expr.left.filters == [[("a", op_symbol, 1)]]
-    assert simplified.expr.right.filters == [[(right_on, op_symbol, 1)]]
+
+    left_read = list(simplified.expr.left.find_operations(ReadParquet))[0]
+    right_read = list(simplified.expr.right.find_operations(ReadParquet))[0]
+
+    # if n_intermediate == 0:
+    #     left_expr = simplified.expr.left
+    #     right_expr = simplified.expr.right
+    # elif n_intermediate == 1:
+    #     left_expr = simplified.expr.left.frame
+    #     right_expr = simplified.expr.right
+    # else:
+    #     left_expr = simplified.expr.left.frame
+    #     right_expr = simplified.expr.right
+
+    assert left_read.filters == [[("a", op_symbol, 1)]]
+    assert right_read.filters == [[(right_on, op_symbol, 1)]]
 
 
 # TODO: tests for
@@ -439,10 +453,8 @@ def test_predicate_pullup_both(tmpdir, right_on: str):
 
     simplified = result.simplify()
     # pushdown is applied to both sides
-    assert sorted(simplified.expr.left.filters) == [[("a", ">=", 1), ("a", "<=", 2)]]
-    assert sorted(simplified.expr.right.filters) == [
-        [(right_on, ">=", 1), (right_on, "<=", 2)]
-    ]
+    assert sorted(simplified.expr.left.filters[0]) == [("a", "<=", 2), ("a", ">=", 1)]
+    assert sorted(simplified.expr.right.filters[0]) == [(right_on, "<=", 2), (right_on, ">=", 1)]
 
 
 def test_predicate_pullup_isin(tmpdir):
