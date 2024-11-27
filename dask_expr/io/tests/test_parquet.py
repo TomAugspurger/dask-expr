@@ -11,7 +11,7 @@ from dask.utils import key_split
 from pyarrow import fs
 
 from dask_expr import from_array, from_graph, from_pandas, read_parquet
-from dask_expr._expr import Filter, Lengths, Literal
+from dask_expr._expr import Filter, Lengths, Literal, Isin
 from dask_expr._reductions import Len
 from dask_expr.io import FusedParquetIO, ReadParquet
 from dask_expr.io.parquet import (
@@ -429,6 +429,40 @@ def test_predicate_pullup_both(tmpdir, right_on: str):
     # pushdown is applied to both sides
     assert sorted(simplified.expr.left.filters) == [[("a", ">=", 1), ("a", "<=", 2)]]
     assert sorted(simplified.expr.right.filters) == [[(right_on, ">=", 1), (right_on, "<=", 2)]]
+
+
+def test_predicate_pullup_isin(tmpdir):
+    left = pd.DataFrame(
+        {
+            "a": [1, 2, 3, 4, 5] * 10,
+            "b": range(50),
+        }
+    )
+    right = pd.DataFrame(
+        {
+            "a": [1, 2, 3, 4, 5] * 10,
+            "c": range(50),
+        }
+    )
+ 
+    left_fn = _make_file(tmpdir, df=left, filename="left.parquet")
+    right_fn = _make_file(tmpdir, df=right, filename="right.parquet")
+    ldf = read_parquet(left_fn, filesystem="arrow")
+    rdf = read_parquet(right_fn, filesystem="arrow")
+
+    # filter
+    ldf = ldf[ldf["a"].isin([1, 3])]
+
+    # join
+    result = ldf.merge(rdf, how="inner", on="a")
+    expected = left[left["a"].isin([1, 3])].merge(right, how="inner", on="a")
+
+    assert_eq(result, expected)
+
+    simplified = result.simplify()
+    # pushdown is applied to both sides
+    assert isinstance(simplified.expr.left.predicate, Isin)
+    assert isinstance(simplified.expr.right.predicate, Isin)
 
 
 def test_aggregate_rg_stats_to_file(tmpdir):

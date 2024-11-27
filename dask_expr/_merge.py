@@ -475,7 +475,21 @@ class Merge(Expr):
         return BlockwiseMerge(left, right, **self.kwargs)
 
     def _simplify_down(self):
-        # Check for a predicate pull-up opportunity. The requirements are:
+        # Predicate pull-up optimization:
+        #
+        # This optimization will pull a Filter from one side of a join
+        # "up" through the join, where it can then be pushed back down
+        # the other side. In SQL
+        #
+        #   SELECT * FROM t1, t2
+        #   WHERE t1.a = t2.a
+        #     AND t1.a = 50
+        #
+        # we can insert another filter with `t2.a = 50`, since we know
+        # the join keys must match between the tables, and t1 has been
+        # filtered to just `t1.a = 50`.
+        #
+        # In general, the requirements are:
         # 1. Joining and filtering on the same column
         # 2. The join type (`how`) matches the side(s) being filtered:
         #    - how=left => pull filter from left to right
@@ -486,17 +500,6 @@ class Merge(Expr):
 
         new_right: Filter | None = None
         new_left: Filter | None = None
-
-        # The join type affects whether we can pull up the filter.
-        # Consider a join with how="left" and a RHS with Filter(a = 1)
-        # If we tried to push that down the LHS, the left join
-        # would be incorrect since you'd filter to [[("a", "==", 1)]].
-        # But the `how="left"` says we want all the keys from the LHS.
-        #
-        # The only safe ones are
-        # 1. how="left" permits left -> right
-        # 2. how="right" permits right -> left
-        # 3. how="inner" permits [left -> right, right -> left]
 
         if self.how == "inner":
             left_filter = self.left._find_filter()
@@ -511,44 +514,63 @@ class Merge(Expr):
         else:
             left_filter = right_filter = None
 
-        # Now find cases where we can do stuff
-        # replacements = {}
-        # breakpoint()
         if left_filter is not None:
             # we should have a left or inner join
             if left_filter.predicate.name == self.left_on:
-                # TODO: figure out how to combine filters? Actually, who cares?
-                # We shouldn't have to worry about chained filters. A separate
-                # optimization can take care of AND-ing those into a single layer.
+
+                # this is messy
+                if isinstance(left_filter.predicate, Isin):
+                    new_predicate = left_filter.predicate.substitute(
+                        left_filter.predicate.frame, self.right[self.right_on]
+                    )
+                else:
+                    # binop. Anything else?
+                    new_predicate = left_filter.predicate.left
+
                 new_right = Filter(
                     frame=self.right,
                     # TODO: confirm that LHS is always the column and RHS is always the value
                     predicate=left_filter.predicate.substitute(
-                        left_filter.predicate.left, self.right[self.right_on]
-                    )
+                        new_predicate, self.right[self.right_on]
+                    ),
                 )
+
+                if isinstance(self.right, Filter) and self.right.predicate._name == new_right.predicate._name:
+                    # we've already applied this optimization. Failing to handle this (somewhere)
+                    # will lead to us recursively adding Filter(frame, isin) where the `frame` is
+                    # the output of the previous time through. 
+                    new_right = None
 
         if right_filter is not None:
             if right_filter.predicate.name == self.right_on:
+
+                # this is messy
+                if isinstance(right_filter.predicate, Isin):
+                    new_predicate = right_filter.predicate.substitute(
+                        right_filter.predicate.frame, self.left[self.left_on]
+                    )
+                else:
+                    # binop. Anything else?
+                    new_predicate = right_filter.predicate.left
+
                 new_left = Filter(
                     frame=self.left,
-                    # TODO: confirm that
+                    # TODO: confirm that LHS is always the column and RHS is always the value
                     predicate=right_filter.predicate.substitute(
-                        right_filter.predicate.left, self.left[self.left_on]
-                    )
+                        new_predicate, self.left[self.left_on]
+                    ),
                 )
-        
-        # Right now we make 3 trips through here.
-        # 1. left -> right
-        # 2. right -> left
-        # 3. left -> right
-        #
-        # Between 1 and 2, the left filter is optimized / pushed all the way down
-        # After 3, the optimizer complains that we're in a cycle (which we kinda are)
-        # We need to detect the *optimized* filter and break out of that cycle.
+
+                if isinstance(self.left, Filter) and self.left.predicate._name == new_left.predicate._name:
+                    # we've already applied this optimization. Failing to handle this (somewhere)
+                    # will lead to us recursively adding Filter(frame, isin) where the `frame` is
+                    # the output of the previous time through. 
+                    new_left = None
+
         result = self
-        # breakpoint()
         if new_right is not None:
+            # Needed some check to break out of an infinite loop when the Filter is pushed
+            # down to the IO. Otherwise, we'd keep on adding additional filters.
             left_root = list(self.left.walk())[-1]
             if isinstance(left_root, ReadParquet) and left_root.filters is not None:
                 pass
@@ -562,29 +584,6 @@ class Merge(Expr):
                 result = result.substitute(result.left, new_left)
         if result is not self:
             return result
-
-        # if (
-        #     self.how == "inner"
-        #     and isinstance(self.left, Filter)
-        #     and self.left.predicate.left.name == self.left_on
-        #     and self.left_on == self.right_on
-        # ):
-        #     # This should be generalizable. The key requirement is that the
-        #     # joined on column is also being filtered.
-        #     if isinstance(self.right, Filter):
-        #         return super()._simplify_down()
-
-        #     predicate = self.left.predicate.substitute(
-        #         self.left.predicate.left, self.right[self.right_on]
-        #     )
-
-        #     new_right = Filter(
-        #         frame=self.right,
-        #         predicate=predicate,
-        #     )
-        #     return self.substitute(self.right, new_right)
-        # else:
-        #     return super()._simplify_down()
 
     def _simplify_up(self, parent, dependents):
         if isinstance(parent, Filter):
