@@ -475,12 +475,12 @@ class Merge(Expr):
         return BlockwiseMerge(left, right, **self.kwargs)
 
     def _simplify_down(self):
-        # Check for a predicate pull-up opportunity. The requirements are to
-        # 1. Perform a filter and join on the same column
-        # 2. Join type is:
-        #    - inner (check for pull-up on both sides)
-        #    - left (check for pull-up from left filter to right)
-        #    - right (check for pull-up from right filter to left)
+        # Check for a predicate pull-up opportunity. The requirements are:
+        # 1. Joining and filtering on the same column
+        # 2. The join type (`how`) matches the side(s) being filtered:
+        #    - how=left => pull filter from left to right
+        #    - how=right => pull from right to left
+        #    - how=inner => pull from right to left *and* left to right
         left_filter: Filter | None
         right_filter: Filter | None
 

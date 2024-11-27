@@ -388,6 +388,47 @@ def test_predicate_pullup(tmpdir, n_intermediate: int, how: str, on_kwargs: dict
 # 7 direction. Not quite tested enough.
 
 
+@pytest.mark.parametrize("right_on", ["a", "A"])
+def test_predicate_pullup_both(tmpdir, right_on: str):
+    left = pd.DataFrame(
+        {
+            "a": [1, 2, 3, 4, 5] * 10,
+            "b": [0, 1, 2, 3, 4] * 10,
+            "c": range(50),
+            "d": [6, 7] * 25,
+            "e": [8, 9] * 25,
+        }
+    )
+    right = pd.DataFrame(
+        {
+            right_on: [1, 2, 3, 4, 5] * 10,
+            "b": [0, 1, 2, 3, 4] * 10,
+            "c": range(50),
+            "d": [60, 70] * 25,
+            "e": [80, 90] * 25,
+        }
+    )
+ 
+    left_fn = _make_file(tmpdir, df=left, filename="left.parquet")
+    right_fn = _make_file(tmpdir, df=right, filename="right.parquet")
+    ldf = read_parquet(left_fn, filesystem="arrow")
+    rdf = read_parquet(right_fn, filesystem="arrow")
+
+    # filter
+    ldf = ldf[ldf["a"] >= 1]
+    rdf = rdf[rdf[right_on] <= 2]
+
+    # join
+    result = ldf.merge(rdf, how="inner", left_on="a", right_on=right_on)
+    expected = left[left["a"] >= 1].merge(right[right[right_on] <= 2], how="inner", left_on="a", right_on=right_on)
+
+
+    assert_eq(result, expected)
+
+    simplified = result.simplify()
+    # pushdown is applied to both sides
+    assert sorted(simplified.expr.left.filters) == [[("a", ">=", 1), ("a", "<=", 2)]]
+    assert sorted(simplified.expr.right.filters) == [[(right_on, ">=", 1), (right_on, "<=", 2)]]
 
 
 def test_aggregate_rg_stats_to_file(tmpdir):
