@@ -517,7 +517,6 @@ class Merge(Expr):
         if left_filter is not None:
             # we should have a left or inner join
             if left_filter.predicate.name == self.left_on:
-
                 # this is messy
                 if isinstance(left_filter.predicate, Isin):
                     new_predicate = left_filter.predicate.substitute(
@@ -535,15 +534,17 @@ class Merge(Expr):
                     ),
                 )
 
-                if isinstance(self.right, Filter) and self.right.predicate._name == new_right.predicate._name:
+                if (
+                    isinstance(self.right, Filter)
+                    and self.right.predicate._name == new_right.predicate._name
+                ):
                     # we've already applied this optimization. Failing to handle this (somewhere)
                     # will lead to us recursively adding Filter(frame, isin) where the `frame` is
-                    # the output of the previous time through. 
+                    # the output of the previous time through.
                     new_right = None
 
         if right_filter is not None:
             if right_filter.predicate.name == self.right_on:
-
                 # this is messy
                 if isinstance(right_filter.predicate, Isin):
                     new_predicate = right_filter.predicate.substitute(
@@ -561,10 +562,13 @@ class Merge(Expr):
                     ),
                 )
 
-                if isinstance(self.left, Filter) and self.left.predicate._name == new_left.predicate._name:
+                if (
+                    isinstance(self.left, Filter)
+                    and self.left.predicate._name == new_left.predicate._name
+                ):
                     # we've already applied this optimization. Failing to handle this (somewhere)
                     # will lead to us recursively adding Filter(frame, isin) where the `frame` is
-                    # the output of the previous time through. 
+                    # the output of the previous time through.
                     new_left = None
 
         result = self

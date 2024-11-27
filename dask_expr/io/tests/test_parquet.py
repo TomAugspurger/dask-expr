@@ -11,7 +11,7 @@ from dask.utils import key_split
 from pyarrow import fs
 
 from dask_expr import from_array, from_graph, from_pandas, read_parquet
-from dask_expr._expr import Filter, Lengths, Literal, Isin
+from dask_expr._expr import Filter, Isin, Lengths, Literal
 from dask_expr._reductions import Len
 from dask_expr.io import FusedParquetIO, ReadParquet
 from dask_expr.io.parquet import (
@@ -309,17 +309,29 @@ def test_predicate_pushdown_compound(tmpdir):
 
 @pytest.mark.parametrize("n_intermediate", [0, 1, 2])
 @pytest.mark.parametrize("how", ["left", "inner", "right"])
-@pytest.mark.parametrize("on_kwargs", [
-    {"on": "a"},
-    {"left_on": "a", "right_on": "a"},
-    {"left_on": "a", "right_on": "A"},
-])
-@pytest.mark.parametrize("op_pair", [
-    ("==", lambda x: operator.eq(x, 1)),
-    ("==", lambda x: operator.eq(1, x)),
-    ("<=", lambda x: operator.le(x, 1)),
-])
-def test_predicate_pullup(tmpdir, n_intermediate: int, how: str, on_kwargs: dict[str, str], op_pair: tuple[str, callable]):
+@pytest.mark.parametrize(
+    "on_kwargs",
+    [
+        {"on": "a"},
+        {"left_on": "a", "right_on": "a"},
+        {"left_on": "a", "right_on": "A"},
+    ],
+)
+@pytest.mark.parametrize(
+    "op_pair",
+    [
+        ("==", lambda x: operator.eq(x, 1)),
+        ("==", lambda x: operator.eq(1, x)),
+        ("<=", lambda x: operator.le(x, 1)),
+    ],
+)
+def test_predicate_pullup(
+    tmpdir,
+    n_intermediate: int,
+    how: str,
+    on_kwargs: dict[str, str],
+    op_pair: tuple[str, callable],
+):
     left = pd.DataFrame(
         {
             "a": [1, 2, 3, 4, 5] * 10,
@@ -379,7 +391,6 @@ def test_predicate_pullup(tmpdir, n_intermediate: int, how: str, on_kwargs: dict
     assert simplified.expr.right.filters == [[(right_on, op_symbol, 1)]]
 
 
-
 # TODO: tests for
 # 1. all join types
 # 2. left / right on different keys
@@ -408,7 +419,7 @@ def test_predicate_pullup_both(tmpdir, right_on: str):
             "e": [80, 90] * 25,
         }
     )
- 
+
     left_fn = _make_file(tmpdir, df=left, filename="left.parquet")
     right_fn = _make_file(tmpdir, df=right, filename="right.parquet")
     ldf = read_parquet(left_fn, filesystem="arrow")
@@ -420,15 +431,18 @@ def test_predicate_pullup_both(tmpdir, right_on: str):
 
     # join
     result = ldf.merge(rdf, how="inner", left_on="a", right_on=right_on)
-    expected = left[left["a"] >= 1].merge(right[right[right_on] <= 2], how="inner", left_on="a", right_on=right_on)
-
+    expected = left[left["a"] >= 1].merge(
+        right[right[right_on] <= 2], how="inner", left_on="a", right_on=right_on
+    )
 
     assert_eq(result, expected)
 
     simplified = result.simplify()
     # pushdown is applied to both sides
     assert sorted(simplified.expr.left.filters) == [[("a", ">=", 1), ("a", "<=", 2)]]
-    assert sorted(simplified.expr.right.filters) == [[(right_on, ">=", 1), (right_on, "<=", 2)]]
+    assert sorted(simplified.expr.right.filters) == [
+        [(right_on, ">=", 1), (right_on, "<=", 2)]
+    ]
 
 
 def test_predicate_pullup_isin(tmpdir):
@@ -444,7 +458,7 @@ def test_predicate_pullup_isin(tmpdir):
             "c": range(50),
         }
     )
- 
+
     left_fn = _make_file(tmpdir, df=left, filename="left.parquet")
     right_fn = _make_file(tmpdir, df=right, filename="right.parquet")
     ldf = read_parquet(left_fn, filesystem="arrow")
